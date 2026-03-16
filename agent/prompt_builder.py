@@ -92,8 +92,11 @@ SESSION_SEARCH_GUIDANCE = (
 
 SKILLS_GUIDANCE = (
     "After completing a complex task (5+ tool calls), fixing a tricky error, "
-    "or discovering a non-trivial workflow, consider saving the approach as a "
-    "skill with skill_manage so you can reuse it next time."
+    "or discovering a non-trivial workflow, save the approach as a "
+    "skill with skill_manage so you can reuse it next time.\n"
+    "When using a skill and finding it outdated, incomplete, or wrong, "
+    "patch it immediately with skill_manage(action='patch') — don't wait to be asked. "
+    "Skills that aren't maintained become liabilities."
 )
 
 PLATFORM_HINTS = {
@@ -332,6 +335,9 @@ def build_skills_system_prompt(
         "Before replying, scan the skills below. If one clearly matches your task, "
         "load it with skill_view(name) and follow its instructions. "
         "If a skill has issues, fix it with skill_manage(action='patch').\n"
+        "After difficult/iterative tasks, offer to save as a skill. "
+        "If a skill you loaded was missing steps, had wrong commands, or needed "
+        "pitfalls you discovered, update it before finishing.\n"
         "\n"
         "<available_skills>\n"
         + "\n".join(index_lines) + "\n"

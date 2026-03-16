@@ -812,7 +812,7 @@ class AIAgent:
                 logger.debug("peer %s memory_mode=honcho: local USER.md writes disabled", _hcfg.peer_name or "user")
 
         # Skills config: nudge interval for skill creation reminders
-        self._skill_nudge_interval = 15
+        self._skill_nudge_interval = 10
         try:
             from hermes_cli.config import load_config as _load_skills_config
             skills_config = _load_skills_config().get("skills", {})
@@ -4554,8 +4554,9 @@ class AIAgent:
                 and self._iters_since_skill >= self._skill_nudge_interval
                 and "skill_manage" in self.valid_tool_names):
             user_message += (
-                "\n\n[System: The previous task involved many steps. "
-                "If you discovered a reusable workflow, consider saving it as a skill.]"
+                "\n\n[System: The previous task involved many tool calls. "
+                "Save the approach as a skill if it's reusable, or update "
+                "any existing skill you used if it was wrong or incomplete.]"
             )
             self._iters_since_skill = 0
 
