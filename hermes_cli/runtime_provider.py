@@ -270,12 +270,15 @@ def resolve_runtime_provider(
         }
 
     # API-key providers (z.ai/GLM, Kimi, MiniMax, MiniMax-CN)
+    # MiniMax uses Anthropic Messages API format for reliable tool calling.
+    _ANTHROPIC_COMPAT_PROVIDERS = {"minimax", "minimax-cn"}
     pconfig = PROVIDER_REGISTRY.get(provider)
     if pconfig and pconfig.auth_type == "api_key":
         creds = resolve_api_key_provider_credentials(provider)
+        api_mode = "anthropic_messages" if provider in _ANTHROPIC_COMPAT_PROVIDERS else "chat_completions"
         return {
             "provider": provider,
-            "api_mode": "chat_completions",
+            "api_mode": api_mode,
             "base_url": creds.get("base_url", "").rstrip("/"),
             "api_key": creds.get("api_key", ""),
             "source": creds.get("source", "env"),

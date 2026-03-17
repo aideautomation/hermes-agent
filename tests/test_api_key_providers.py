@@ -68,8 +68,8 @@ class TestProviderRegistry:
     def test_base_urls(self):
         assert PROVIDER_REGISTRY["zai"].inference_base_url == "https://api.z.ai/api/paas/v4"
         assert PROVIDER_REGISTRY["kimi-coding"].inference_base_url == "https://api.moonshot.ai/v1"
-        assert PROVIDER_REGISTRY["minimax"].inference_base_url == "https://api.minimax.io/v1"
-        assert PROVIDER_REGISTRY["minimax-cn"].inference_base_url == "https://api.minimaxi.com/v1"
+        assert PROVIDER_REGISTRY["minimax"].inference_base_url == "https://api.minimax.io/anthropic"
+        assert PROVIDER_REGISTRY["minimax-cn"].inference_base_url == "https://api.minimaxi.com/anthropic"
 
     def test_oauth_providers_unchanged(self):
         """Ensure we didn't break the existing OAuth providers."""
@@ -239,14 +239,14 @@ class TestResolveApiKeyProviderCredentials:
         creds = resolve_api_key_provider_credentials("minimax")
         assert creds["provider"] == "minimax"
         assert creds["api_key"] == "mm-secret-key"
-        assert creds["base_url"] == "https://api.minimax.io/v1"
+        assert creds["base_url"] == "https://api.minimax.io/anthropic"
 
     def test_resolve_minimax_cn_with_key(self, monkeypatch):
         monkeypatch.setenv("MINIMAX_CN_API_KEY", "mmcn-secret-key")
         creds = resolve_api_key_provider_credentials("minimax-cn")
         assert creds["provider"] == "minimax-cn"
         assert creds["api_key"] == "mmcn-secret-key"
-        assert creds["base_url"] == "https://api.minimaxi.com/v1"
+        assert creds["base_url"] == "https://api.minimaxi.com/anthropic"
 
     def test_resolve_with_custom_base_url(self, monkeypatch):
         monkeypatch.setenv("GLM_API_KEY", "glm-key")

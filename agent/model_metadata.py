@@ -71,6 +71,8 @@ DEFAULT_CONTEXT_LENGTHS = {
     "MiniMax-M2.5": 204800,
     "MiniMax-M2.5-highspeed": 204800,
     "MiniMax-M2.1": 204800,
+    "MiniMax-M2.1-highspeed": 204800,
+    "MiniMax-M2": 204800,
 }
 
 

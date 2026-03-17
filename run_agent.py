@@ -543,17 +543,30 @@ class AIAgent:
 
         if self.api_mode == "anthropic_messages":
             from agent.anthropic_adapter import build_anthropic_client, resolve_anthropic_token
-            effective_key = api_key or resolve_anthropic_token() or ""
+            # Third-party Anthropic-compatible providers (e.g. MiniMax) use
+            # plain api_key auth — no OAuth detection or Anthropic env vars.
+            _THIRD_PARTY_ANTHROPIC = {"minimax", "minimax-cn"}
+            self._is_third_party_anthropic = self.provider in _THIRD_PARTY_ANTHROPIC
+            if self._is_third_party_anthropic:
+                effective_key = api_key or ""
+            else:
+                effective_key = api_key or resolve_anthropic_token() or ""
             self._anthropic_api_key = effective_key
             self._anthropic_base_url = base_url
-            from agent.anthropic_adapter import _is_oauth_token as _is_oat
-            self._is_anthropic_oauth = _is_oat(effective_key)
-            self._anthropic_client = build_anthropic_client(effective_key, base_url)
+            if self._is_third_party_anthropic:
+                self._is_anthropic_oauth = False
+            else:
+                from agent.anthropic_adapter import _is_oauth_token as _is_oat
+                self._is_anthropic_oauth = _is_oat(effective_key)
+            self._anthropic_client = build_anthropic_client(
+                effective_key, base_url, third_party=self._is_third_party_anthropic,
+            )
             # No OpenAI client needed for Anthropic mode
             self.client = None
             self._client_kwargs = {}
             if not self.quiet_mode:
-                print(f"🤖 AI Agent initialized with model: {self.model} (Anthropic native)")
+                label = f"{self.provider} (Anthropic compat)" if self._is_third_party_anthropic else "Anthropic native"
+                print(f"🤖 AI Agent initialized with model: {self.model} ({label})")
                 if effective_key and len(effective_key) > 12:
                     print(f"🔑 Using token: {effective_key[:8]}...{effective_key[-4:]}")
         else:
@@ -2765,6 +2778,10 @@ class AIAgent:
 
     def _try_refresh_anthropic_client_credentials(self) -> bool:
         if self.api_mode != "anthropic_messages" or not hasattr(self, "_anthropic_api_key"):
+            return False
+        # Third-party Anthropic-compatible providers (e.g. MiniMax) manage
+        # their own credentials — don't try to resolve Anthropic tokens.
+        if getattr(self, "_is_third_party_anthropic", False):
             return False
 
         try:
@@ -5370,23 +5387,28 @@ class AIAgent:
                         and not anthropic_auth_retry_attempted
                     ):
                         anthropic_auth_retry_attempted = True
-                        from agent.anthropic_adapter import _is_oauth_token
                         if self._try_refresh_anthropic_client_credentials():
                             print(f"{self.log_prefix}🔐 Anthropic credentials refreshed after 401. Retrying request...")
                             continue
                         # Credential refresh didn't help — show diagnostic info
                         key = self._anthropic_api_key
-                        auth_method = "Bearer (OAuth/setup-token)" if _is_oauth_token(key) else "x-api-key (API key)"
-                        print(f"{self.log_prefix}🔐 Anthropic 401 — authentication failed.")
-                        print(f"{self.log_prefix}   Auth method: {auth_method}")
-                        print(f"{self.log_prefix}   Token prefix: {key[:12]}..." if key and len(key) > 12 else f"{self.log_prefix}   Token: (empty or short)")
-                        print(f"{self.log_prefix}   Troubleshooting:")
-                        print(f"{self.log_prefix}     • Check ANTHROPIC_TOKEN in ~/.hermes/.env for Hermes-managed OAuth/setup tokens")
-                        print(f"{self.log_prefix}     • Check ANTHROPIC_API_KEY in ~/.hermes/.env for API keys or legacy token values")
-                        print(f"{self.log_prefix}     • For API keys: verify at https://console.anthropic.com/settings/keys")
-                        print(f"{self.log_prefix}     • For Claude Code: run 'claude /login' to refresh, then retry")
-                        print(f"{self.log_prefix}     • Clear stale keys: hermes config set ANTHROPIC_TOKEN \"\"")
-                        print(f"{self.log_prefix}     • Legacy cleanup: hermes config set ANTHROPIC_API_KEY \"\"")
+                        if getattr(self, "_is_third_party_anthropic", False):
+                            print(f"{self.log_prefix}🔐 {self.provider} 401 — authentication failed.")
+                            print(f"{self.log_prefix}   Token prefix: {key[:12]}..." if key and len(key) > 12 else f"{self.log_prefix}   Token: (empty or short)")
+                            print(f"{self.log_prefix}   Troubleshooting: check your API key in ~/.hermes/.env")
+                        else:
+                            from agent.anthropic_adapter import _is_oauth_token
+                            auth_method = "Bearer (OAuth/setup-token)" if _is_oauth_token(key) else "x-api-key (API key)"
+                            print(f"{self.log_prefix}🔐 Anthropic 401 — authentication failed.")
+                            print(f"{self.log_prefix}   Auth method: {auth_method}")
+                            print(f"{self.log_prefix}   Token prefix: {key[:12]}..." if key and len(key) > 12 else f"{self.log_prefix}   Token: (empty or short)")
+                            print(f"{self.log_prefix}   Troubleshooting:")
+                            print(f"{self.log_prefix}     • Check ANTHROPIC_TOKEN in ~/.hermes/.env for Hermes-managed OAuth/setup tokens")
+                            print(f"{self.log_prefix}     • Check ANTHROPIC_API_KEY in ~/.hermes/.env for API keys or legacy token values")
+                            print(f"{self.log_prefix}     • For API keys: verify at https://console.anthropic.com/settings/keys")
+                            print(f"{self.log_prefix}     • For Claude Code: run 'claude /login' to refresh, then retry")
+                            print(f"{self.log_prefix}     • Clear stale keys: hermes config set ANTHROPIC_TOKEN \"\"")
+                            print(f"{self.log_prefix}     • Legacy cleanup: hermes config set ANTHROPIC_API_KEY \"\"")
 
                     retry_count += 1
                     elapsed_time = time.time() - api_start_time

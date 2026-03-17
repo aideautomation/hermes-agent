@@ -74,8 +74,12 @@ def _is_oauth_token(key: str) -> bool:
     return True
 
 
-def build_anthropic_client(api_key: str, base_url: str = None):
+def build_anthropic_client(api_key: str, base_url: str = None, third_party: bool = False):
     """Create an Anthropic client, auto-detecting setup-tokens vs API keys.
+
+    When *third_party* is True (e.g. MiniMax's Anthropic-compatible endpoint),
+    skips OAuth detection, beta headers, and Claude Code user-agent — uses
+    plain api_key auth only.
 
     Returns an anthropic.Anthropic instance.
     """
@@ -92,7 +96,11 @@ def build_anthropic_client(api_key: str, base_url: str = None):
     if base_url:
         kwargs["base_url"] = base_url
 
-    if _is_oauth_token(api_key):
+    if third_party:
+        # Third-party Anthropic-compatible endpoint (e.g. MiniMax) —
+        # plain api_key, no Anthropic-specific betas or Claude Code headers.
+        kwargs["api_key"] = api_key
+    elif _is_oauth_token(api_key):
         # OAuth access token / setup-token → Bearer auth + Claude Code identity.
         # Anthropic routes OAuth requests based on user-agent and headers;
         # without Claude Code's fingerprint, requests get intermittent 500s.
@@ -408,13 +416,17 @@ def normalize_model_name(model: str) -> str:
     - Strips 'anthropic/' prefix (OpenRouter format, case-insensitive)
     - Converts dots to hyphens in version numbers (OpenRouter uses dots,
       Anthropic uses hyphens: claude-opus-4.6 → claude-opus-4-6)
+
+    Only applies transforms to Claude models. Third-party models (e.g.
+    MiniMax-M2.5) are returned as-is to preserve their naming convention.
     """
     lower = model.lower()
     if lower.startswith("anthropic/"):
         model = model[len("anthropic/"):]
-    # OpenRouter uses dots for version separators (claude-opus-4.6),
-    # Anthropic uses hyphens (claude-opus-4-6). Convert dots to hyphens.
-    model = model.replace(".", "-")
+    # Only convert dots to hyphens for Claude models — third-party models
+    # like MiniMax-M2.5 use dots as part of their canonical name.
+    if "claude" in model.lower():
+        model = model.replace(".", "-")
     return model
 
 
