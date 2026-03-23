@@ -1179,7 +1179,6 @@ def _expand_env_vars(obj):
     None are left untouched.  Unresolved references (variable not in
     ``os.environ``) are kept verbatim so callers can detect them.
     """
-    import re
     if isinstance(obj, str):
         return re.sub(
             r"\${([^}]+)}",
@@ -1191,6 +1190,8 @@ def _expand_env_vars(obj):
     if isinstance(obj, list):
         return [_expand_env_vars(item) for item in obj]
     return obj
+
+
 def _normalize_max_turns_config(config: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize legacy root-level max_turns into agent.max_turns."""
     config = dict(config)
