@@ -27,26 +27,46 @@ def _make_mock_modal_env(monkeypatch, tmp_path):
     return env
 
 
+def _make_mock_stdin():
+    """Create a mock stdin that captures written data."""
+    stdin = MagicMock()
+    written_chunks = []
+
+    def mock_write(data):
+        written_chunks.append(data)
+
+    stdin.write = mock_write
+    stdin.write_eof = MagicMock()
+    stdin.drain = MagicMock()
+    stdin.drain.aio = AsyncMock()
+    stdin._written_chunks = written_chunks
+    return stdin
+
+
 def _wire_async_exec(env, exec_calls=None):
     """Wire mock sandbox.exec.aio and a real run_coroutine on the env.
 
     Optionally captures exec call args into *exec_calls* list.
-    Returns a dict that will contain ``run_coroutine`` kwargs after
-    the next call (useful for timeout assertions).
+    Returns (exec_calls, run_kwargs, stdin_mock).
     """
     if exec_calls is None:
         exec_calls = []
     run_kwargs: dict = {}
+    stdin_mock = _make_mock_stdin()
 
-    async def mock_exec(*args, **kwargs):
+    async def mock_exec_fn(*args, **kwargs):
         exec_calls.append(args)
         proc = MagicMock()
         proc.wait = MagicMock()
         proc.wait.aio = AsyncMock(return_value=0)
+        proc.stdin = stdin_mock
+        proc.stderr = MagicMock()
+        proc.stderr.read = MagicMock()
+        proc.stderr.read.aio = AsyncMock(return_value="")
         return proc
 
     env._sandbox.exec = MagicMock()
-    env._sandbox.exec.aio = mock_exec
+    env._sandbox.exec.aio = mock_exec_fn
 
     def real_run_coroutine(coro, **kwargs):
         run_kwargs.update(kwargs)
@@ -57,7 +77,7 @@ def _wire_async_exec(env, exec_calls=None):
             loop.close()
 
     env._worker.run_coroutine = real_run_coroutine
-    return exec_calls, run_kwargs
+    return exec_calls, run_kwargs, stdin_mock
 
 
 class TestModalBulkUpload:
@@ -70,7 +90,7 @@ class TestModalBulkUpload:
         env._worker.run_coroutine.assert_not_called()
 
     def test_tar_archive_contains_all_files(self, monkeypatch, tmp_path):
-        """The tar archive sent to the sandbox should contain all files."""
+        """The tar archive sent via stdin should contain all files."""
         env = _make_mock_modal_env(monkeypatch, tmp_path)
 
         src_a = tmp_path / "a.json"
@@ -83,10 +103,10 @@ class TestModalBulkUpload:
             (str(src_b), "/root/.hermes/skills/b.py"),
         ]
 
-        exec_calls, _ = _wire_async_exec(env)
+        exec_calls, _, stdin_mock = _wire_async_exec(env)
         env._modal_bulk_upload(files)
 
-        # Verify exec was called with bash -c and a tar command
+        # Verify the command reads from stdin (no echo with embedded payload)
         assert len(exec_calls) == 1
         args = exec_calls[0]
         assert args[0] == "bash"
@@ -97,12 +117,8 @@ class TestModalBulkUpload:
         assert "tar xzf" in cmd
         assert "-C /" in cmd
 
-        # Extract the base64 payload and verify tar contents
-        import re
-        match = re.search(r"echo '?([A-Za-z0-9+/=]+)'?", cmd)
-        assert match, f"Could not find base64 payload in command: {cmd}"
-        payload = match.group(1)
-
+        # Reassemble the base64 payload from stdin chunks and verify tar contents
+        payload = "".join(stdin_mock._written_chunks)
         tar_data = base64.b64decode(payload)
         buf = io.BytesIO(tar_data)
         with tarfile.open(fileobj=buf, mode="r:gz") as tar:
@@ -116,6 +132,9 @@ class TestModalBulkUpload:
             b_content = tar.extractfile("root/.hermes/skills/b.py").read()
             assert b_content == b"skill_content"
 
+        # Verify stdin was closed
+        stdin_mock.write_eof.assert_called_once()
+
     def test_mkdir_includes_all_parents(self, monkeypatch, tmp_path):
         """Remote parent directories should be pre-created in the command."""
         env = _make_mock_modal_env(monkeypatch, tmp_path)
@@ -128,7 +147,7 @@ class TestModalBulkUpload:
             (str(src), "/root/.hermes/skills/deep/nested/f.txt"),
         ]
 
-        exec_calls, _ = _wire_async_exec(env)
+        exec_calls, _, _ = _wire_async_exec(env)
         env._modal_bulk_upload(files)
 
         cmd = exec_calls[0][2]
@@ -145,7 +164,7 @@ class TestModalBulkUpload:
             src.write_text(f"content_{i}")
             files.append((str(src), f"/root/.hermes/cache/file_{i}.txt"))
 
-        exec_calls, _ = _wire_async_exec(env)
+        exec_calls, _, _ = _wire_async_exec(env)
         env._modal_bulk_upload(files)
 
         # Should be exactly 1 exec call, not 20
@@ -189,7 +208,7 @@ class TestModalBulkUpload:
         src.write_text("data")
         files = [(str(src), "/root/.hermes/f.txt")]
 
-        _, run_kwargs = _wire_async_exec(env)
+        _, run_kwargs, _ = _wire_async_exec(env)
         env._modal_bulk_upload(files)
 
         assert run_kwargs.get("timeout") == 120
@@ -202,14 +221,20 @@ class TestModalBulkUpload:
         src.write_text("data")
         files = [(str(src), "/root/.hermes/f.txt")]
 
-        async def mock_exec(*args, **kwargs):
+        stdin_mock = _make_mock_stdin()
+
+        async def mock_exec_fn(*args, **kwargs):
             proc = MagicMock()
             proc.wait = MagicMock()
             proc.wait.aio = AsyncMock(return_value=1)  # non-zero exit
+            proc.stdin = stdin_mock
+            proc.stderr = MagicMock()
+            proc.stderr.read = MagicMock()
+            proc.stderr.read.aio = AsyncMock(return_value="tar: error")
             return proc
 
         env._sandbox.exec = MagicMock()
-        env._sandbox.exec.aio = mock_exec
+        env._sandbox.exec.aio = mock_exec_fn
 
         def real_run_coroutine(coro, **kwargs):
             loop = asyncio.new_event_loop()
@@ -222,3 +247,49 @@ class TestModalBulkUpload:
 
         with pytest.raises(RuntimeError, match="Modal bulk upload failed"):
             env._modal_bulk_upload(files)
+
+    def test_payload_not_in_command_string(self, monkeypatch, tmp_path):
+        """The base64 payload must NOT appear in the bash -c argument.
+
+        This is the core ARG_MAX fix: the payload goes through stdin,
+        not embedded in the command string.
+        """
+        env = _make_mock_modal_env(monkeypatch, tmp_path)
+
+        src = tmp_path / "f.txt"
+        src.write_text("some data to upload")
+        files = [(str(src), "/root/.hermes/f.txt")]
+
+        exec_calls, _, stdin_mock = _wire_async_exec(env)
+        env._modal_bulk_upload(files)
+
+        # The command should NOT contain an echo with the payload
+        cmd = exec_calls[0][2]
+        assert "echo" not in cmd
+        # The payload should go through stdin
+        assert len(stdin_mock._written_chunks) > 0
+
+    def test_stdin_chunked_for_large_payloads(self, monkeypatch, tmp_path):
+        """Payloads larger than _STDIN_CHUNK_SIZE should be split into multiple writes."""
+        env = _make_mock_modal_env(monkeypatch, tmp_path)
+
+        # Use random bytes so gzip cannot compress them -- ensures the
+        # base64 payload exceeds one 1 MB chunk.
+        import os as _os
+        src = tmp_path / "large.bin"
+        src.write_bytes(_os.urandom(1024 * 1024 + 512 * 1024))
+        files = [(str(src), "/root/.hermes/large.bin")]
+
+        exec_calls, _, stdin_mock = _wire_async_exec(env)
+        env._modal_bulk_upload(files)
+
+        # Should have multiple stdin write chunks
+        assert len(stdin_mock._written_chunks) >= 2
+
+        # Reassembled payload should still decode to valid tar
+        payload = "".join(stdin_mock._written_chunks)
+        tar_data = base64.b64decode(payload)
+        buf = io.BytesIO(tar_data)
+        with tarfile.open(fileobj=buf, mode="r:gz") as tar:
+            names = tar.getnames()
+            assert "root/.hermes/large.bin" in names

@@ -152,7 +152,6 @@ class SSHEnvironment(BaseEnvironment):
         if not files:
             return
 
-        # Pre-create all unique parent directories in one SSH call
         parents = unique_parent_dirs(files)
         if parents:
             cmd = self._build_ssh_command()
@@ -164,18 +163,11 @@ class SSHEnvironment(BaseEnvironment):
         # Symlink staging avoids fragile GNU tar --transform rules.
         with tempfile.TemporaryDirectory(prefix="hermes-ssh-bulk-") as staging:
             for host_path, remote_path in files:
-                # remote_path is absolute (e.g. /home/user/.hermes/skills/foo.md)
-                # Create the directory structure under staging
                 staged = os.path.join(staging, remote_path.lstrip("/"))
                 os.makedirs(os.path.dirname(staged), exist_ok=True)
-                # Symlink to the actual file (avoid copying)
                 os.symlink(os.path.abspath(host_path), staged)
 
-            # tar: dereference symlinks (-h), create archive from staging root
-            # The archive paths are relative to staging, which mirrors / on remote
             tar_cmd = ["tar", "-chf", "-", "-C", staging, "."]
-
-            # ssh: extract on remote at /
             ssh_cmd = self._build_ssh_command()
             ssh_cmd.append("tar xf - -C /")
 

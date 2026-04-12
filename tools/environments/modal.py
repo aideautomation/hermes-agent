@@ -274,55 +274,75 @@ class ModalEnvironment(BaseEnvironment):
         self.init_session()
 
     def _modal_upload(self, host_path: str, remote_path: str) -> None:
-        """Upload a single file via base64-over-exec."""
+        """Upload a single file via base64 piped through stdin."""
         content = Path(host_path).read_bytes()
         b64 = base64.b64encode(content).decode("ascii")
         container_dir = str(Path(remote_path).parent)
         cmd = (
             f"mkdir -p {shlex.quote(container_dir)} && "
-            f"echo {shlex.quote(b64)} | base64 -d > {shlex.quote(remote_path)}"
+            f"base64 -d > {shlex.quote(remote_path)}"
         )
 
         async def _write():
             proc = await self._sandbox.exec.aio("bash", "-c", cmd)
+            offset = 0
+            chunk_size = self._STDIN_CHUNK_SIZE
+            while offset < len(b64):
+                proc.stdin.write(b64[offset:offset + chunk_size])
+                await proc.stdin.drain.aio()
+                offset += chunk_size
+            proc.stdin.write_eof()
+            await proc.stdin.drain.aio()
             await proc.wait.aio()
 
-        self._worker.run_coroutine(_write(), timeout=15)
+        self._worker.run_coroutine(_write(), timeout=30)
+
+    # Modal SDK stdin buffer limit (legacy server path).  The command-router
+    # path allows 16 MB, but we must stay under the smaller 2 MB cap for
+    # compatibility.  Chunks are written below this threshold and flushed
+    # individually via drain().
+    _STDIN_CHUNK_SIZE = 1 * 1024 * 1024  # 1 MB — safe for both transport paths
 
     def _modal_bulk_upload(self, files: list[tuple[str, str]]) -> None:
-        """Upload many files in a single exec call via tar archive.
+        """Upload many files via tar archive piped through stdin.
 
-        Builds a gzipped tar archive in memory, base64-encodes it, and
-        decodes+extracts in one ``exec`` call.  Avoids per-file
-        exec+encoding overhead (~580 files goes from minutes to seconds).
+        Builds a gzipped tar archive in memory and streams it into a
+        ``base64 -d | tar xzf -`` pipeline via the process's stdin,
+        avoiding the Modal SDK's 64 KB ``ARG_MAX_BYTES`` exec-arg limit.
         """
         if not files:
             return
 
-        # Build a tar archive in memory with files at their remote paths
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as tar:
             for host_path, remote_path in files:
-                # Store with leading '/' stripped so extracting at '/'
-                # recreates the full absolute path
                 tar.add(host_path, arcname=remote_path.lstrip("/"))
         payload = base64.b64encode(buf.getvalue()).decode("ascii")
 
-        # Pre-create parent dirs + decode + extract in one exec call
         parents = unique_parent_dirs(files)
         mkdir_part = quoted_mkdir_command(parents)
-        cmd = (
-            f"{mkdir_part} && "
-            f"echo {shlex.quote(payload)} | base64 -d | tar xzf - -C /"
-        )
-        sandbox = self._sandbox
+        cmd = f"{mkdir_part} && base64 -d | tar xzf - -C /"
 
         async def _bulk():
-            proc = await sandbox.exec.aio("bash", "-c", cmd)
+            proc = await self._sandbox.exec.aio("bash", "-c", cmd)
+
+            # Stream payload through stdin in chunks to stay under the
+            # SDK's per-write buffer limit (2 MB legacy / 16 MB router).
+            offset = 0
+            chunk_size = self._STDIN_CHUNK_SIZE
+            while offset < len(payload):
+                proc.stdin.write(payload[offset:offset + chunk_size])
+                await proc.stdin.drain.aio()
+                offset += chunk_size
+
+            proc.stdin.write_eof()
+            await proc.stdin.drain.aio()
+
             exit_code = await proc.wait.aio()
             if exit_code != 0:
+                stderr_text = await proc.stderr.read.aio()
                 raise RuntimeError(
-                    f"Modal bulk upload failed (exit {exit_code})"
+                    f"Modal bulk upload failed (exit {exit_code}): {stderr_text}"
                 )
 
         self._worker.run_coroutine(_bulk(), timeout=120)
