@@ -840,19 +840,51 @@ class APIServerAdapter(BasePlatformAdapter):
                     system_prompt = content
                 else:
                     system_prompt = system_prompt + "\n" + content
-            elif role in ("user", "assistant"):
+            elif role in ("user", "assistant", "tool"):
                 try:
-                    content = _normalize_multimodal_content(raw_content)
+                    if role == "tool":
+                        content = _normalize_chat_content(raw_content)
+                    else:
+                        content = _normalize_multimodal_content(raw_content)
                 except ValueError as exc:
                     return _multimodal_validation_error(exc, param=f"messages[{idx}].content")
+
+                # Open WebUI (and some OpenAI-compatible frontends) may send
+                # assistant tool-call turns with empty content but populated
+                # tool_calls metadata. Preserve a compact marker so the next
+                # turn retains "a tool was called" context instead of losing
+                # continuity and hallucinating prior actions.
+                if role == "assistant" and not _content_has_visible_payload(content):
+                    tool_calls = msg.get("tool_calls")
+                    if isinstance(tool_calls, list) and tool_calls:
+                        names = []
+                        for tc in tool_calls:
+                            if isinstance(tc, dict):
+                                func = tc.get("function") or {}
+                                name = func.get("name") if isinstance(func, dict) else None
+                                if isinstance(name, str) and name.strip():
+                                    names.append(name.strip())
+                        if names:
+                            content = f"[assistant issued tool calls: {', '.join(names)}]"
+
                 conversation_messages.append({"role": role, "content": content})
 
-        # Extract the last user message as the primary input
+        # Extract the last user message as the primary input.
+        # This is more robust than taking the last message blindly because
+        # some clients may include assistant/tool turns before sending the
+        # next user prompt.
         user_message: Any = ""
         history = []
         if conversation_messages:
-            user_message = conversation_messages[-1].get("content", "")
-            history = conversation_messages[:-1]
+            user_idx = None
+            for i in range(len(conversation_messages) - 1, -1, -1):
+                msg = conversation_messages[i]
+                if msg.get("role") == "user" and _content_has_visible_payload(msg.get("content", "")):
+                    user_idx = i
+                    break
+            if user_idx is not None:
+                user_message = conversation_messages[user_idx].get("content", "")
+                history = conversation_messages[:user_idx] + conversation_messages[user_idx + 1 :]
 
         if not _content_has_visible_payload(user_message):
             return web.json_response(
