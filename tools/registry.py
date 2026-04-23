@@ -18,6 +18,7 @@ import ast
 import importlib
 import json
 import logging
+import re
 import threading
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set
@@ -289,6 +290,34 @@ class ToolRegistry:
     # Dispatch
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _normalize_tool_name(name: str, max_iter: int = 4) -> str:
+        """Best-effort normalization for common LLM tool-name drift.
+
+        Handles CamelCase, mixed separators, and redundant ``_tool`` suffixes.
+        Bounded iteration allows layered drift like ``TodoTool_tool``:
+        ``TodoTool_tool`` -> ``todo_tool`` -> ``todo``.
+        """
+
+        def _camel_to_snake(value: str) -> str:
+            value = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", value)
+            value = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", value)
+            return value
+
+        candidate = str(name or "").strip()
+        for _ in range(max_iter):
+            previous = candidate
+            candidate = candidate.replace("-", "_")
+            candidate = _camel_to_snake(candidate)
+            candidate = candidate.lower()
+            candidate = re.sub(r"_+", "_", candidate).strip("_")
+            if candidate.endswith("_tool"):
+                candidate = candidate[:-5]
+                candidate = candidate.rstrip("_")
+            if candidate == previous:
+                break
+        return candidate
+
     def dispatch(self, name: str, args: dict, **kwargs) -> str:
         """Execute a tool handler by name.
 
@@ -297,6 +326,19 @@ class ToolRegistry:
           for consistent error format.
         """
         entry = self.get_entry(name)
+        resolved_name = name
+        if not entry:
+            normalized_name = self._normalize_tool_name(name)
+            if normalized_name and normalized_name != name:
+                entry = self.get_entry(normalized_name)
+                if entry:
+                    resolved_name = normalized_name
+                    logger.warning(
+                        "Tool name normalized from '%s' to '%s' for dispatch",
+                        name,
+                        normalized_name,
+                    )
+
         if not entry:
             return json.dumps({"error": f"Unknown tool: {name}"})
         try:
@@ -305,7 +347,7 @@ class ToolRegistry:
                 return _run_async(entry.handler(args, **kwargs))
             return entry.handler(args, **kwargs)
         except Exception as e:
-            logger.exception("Tool %s dispatch error: %s", name, e)
+            logger.exception("Tool %s dispatch error: %s", resolved_name, e)
             return json.dumps({"error": f"Tool execution failed: {type(e).__name__}: {e}"})
 
     # ------------------------------------------------------------------

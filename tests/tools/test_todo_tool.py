@@ -114,6 +114,29 @@ class TestTodoToolFunction:
         ))
         assert result["summary"]["in_progress"] == 1
 
+    def test_write_mode_accepts_json_string_todos(self):
+        store = TodoStore()
+        serialized = json.dumps([
+            {"id": "1", "content": "From string", "status": "pending"}
+        ])
+        result = json.loads(todo_tool(todos=serialized, store=store))
+        assert result["summary"]["total"] == 1
+        assert result["todos"][0]["content"] == "From string"
+
+    def test_non_dict_items_do_not_crash(self):
+        store = TodoStore()
+        result = json.loads(todo_tool(todos=["not-a-dict"], store=store))
+        assert result["summary"]["total"] == 1
+        assert result["todos"][0]["id"] == "?"
+        assert result["todos"][0]["content"] == "(no description)"
+        assert result["todos"][0]["status"] == "pending"
+
+    def test_invalid_json_string_returns_error(self):
+        store = TodoStore()
+        result = json.loads(todo_tool(todos="{not valid json", store=store))
+        assert "error" in result
+        assert "todos must be valid JSON" in result["error"]
+
     def test_no_store_returns_error(self):
         result = json.loads(todo_tool())
         assert "error" in result
