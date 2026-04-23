@@ -844,6 +844,75 @@ class TestChatCompletionsEndpoint:
             assert call_kwargs["conversation_history"][1] == {"role": "assistant", "content": "2"}
 
     @pytest.mark.asyncio
+    async def test_tool_messages_and_assistant_tool_calls_are_preserved(self, adapter):
+        """Tool-turn context should survive chat/completions replay from Open WebUI-like clients."""
+        mock_result = {"final_response": "Done", "messages": [], "api_calls": 1}
+
+        app = _create_app(adapter)
+        async with TestClient(TestServer(app)) as cli:
+            with patch.object(adapter, "_run_agent", new_callable=AsyncMock) as mock_run:
+                mock_run.return_value = (mock_result, {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0})
+                resp = await cli.post(
+                    "/v1/chat/completions",
+                    json={
+                        "model": "hermes-agent",
+                        "messages": [
+                            {"role": "user", "content": "Read foo.txt"},
+                            {
+                                "role": "assistant",
+                                "content": "",
+                                "tool_calls": [
+                                    {
+                                        "id": "call_1",
+                                        "type": "function",
+                                        "function": {"name": "read_file", "arguments": '{"path":"foo.txt"}'},
+                                    }
+                                ],
+                            },
+                            {"role": "tool", "tool_call_id": "call_1", "content": "line1\nline2"},
+                            {"role": "user", "content": "방금 읽은 내용 그대로 출력해"},
+                        ],
+                    },
+                )
+
+            assert resp.status == 200
+            call_kwargs = mock_run.call_args.kwargs
+            assert call_kwargs["user_message"] == "방금 읽은 내용 그대로 출력해"
+            history = call_kwargs["conversation_history"]
+            assert any(m["role"] == "tool" and "line1" in m["content"] for m in history)
+            assert any(
+                m["role"] == "assistant" and "assistant issued tool calls" in m["content"] and "read_file" in m["content"]
+                for m in history
+            )
+
+    @pytest.mark.asyncio
+    async def test_last_user_message_selected_when_trailing_tool_message_exists(self, adapter):
+        """Even with malformed trailing tool turn, last visible user turn should be selected."""
+        mock_result = {"final_response": "ok", "messages": [], "api_calls": 1}
+
+        app = _create_app(adapter)
+        async with TestClient(TestServer(app)) as cli:
+            with patch.object(adapter, "_run_agent", new_callable=AsyncMock) as mock_run:
+                mock_run.return_value = (mock_result, {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0})
+                resp = await cli.post(
+                    "/v1/chat/completions",
+                    json={
+                        "model": "hermes-agent",
+                        "messages": [
+                            {"role": "user", "content": "A"},
+                            {"role": "assistant", "content": "B"},
+                            {"role": "user", "content": "C"},
+                            {"role": "tool", "content": "tool-output"},
+                        ],
+                    },
+                )
+
+            assert resp.status == 200
+            call_kwargs = mock_run.call_args.kwargs
+            assert call_kwargs["user_message"] == "C"
+            assert any(m["role"] == "tool" for m in call_kwargs["conversation_history"])
+
+    @pytest.mark.asyncio
     async def test_agent_error_returns_500(self, adapter):
         """Agent exception returns 500."""
         app = _create_app(adapter)
