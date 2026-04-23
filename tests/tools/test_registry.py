@@ -119,6 +119,30 @@ class TestUnknownToolDispatch:
         assert "error" in result
         assert "Unknown tool" in result["error"]
 
+    def test_dispatch_normalizes_camelcase_and_tool_suffix(self):
+        reg = ToolRegistry()
+        reg.register(
+            name="todo",
+            toolset="core",
+            schema=_make_schema("todo"),
+            handler=_dummy_handler,
+        )
+
+        result = json.loads(reg.dispatch("TodoTool_tool", {}))
+        assert result == {"ok": True}
+
+    def test_dispatch_normalizes_camelcase_to_snake_case(self):
+        reg = ToolRegistry()
+        reg.register(
+            name="write_file",
+            toolset="core",
+            schema=_make_schema("write_file"),
+            handler=_dummy_handler,
+        )
+
+        result = json.loads(reg.dispatch("WriteFile_tool", {}))
+        assert result == {"ok": True}
+
 
 class TestToolsetAvailability:
     def test_no_check_fn_is_available(self):

@@ -2926,6 +2926,26 @@ class TestRetryExhaustion:
         assert "UnboundLocalError" not in result.get("error", "")
         assert "bad messages" in result["error"]
 
+    def test_jsondecode_error_is_retried_not_treated_as_local_validation(self, agent):
+        self._setup_agent(agent)
+        good_resp = _mock_response(content="Recovered", finish_reason="stop")
+        agent.client.chat.completions.create.side_effect = [
+            json.JSONDecodeError("Expecting value", "", 0),
+            good_resp,
+        ]
+
+        with (
+            patch.object(agent, "_persist_session"),
+            patch.object(agent, "_save_trajectory"),
+            patch.object(agent, "_cleanup_task_resources"),
+            patch("run_agent.time", self._make_fast_time_mock()),
+        ):
+            result = agent.run_conversation("hello")
+
+        assert result.get("completed") is True
+        assert result.get("final_response") == "Recovered"
+        assert agent.client.chat.completions.create.call_count == 2
+
 
 # ---------------------------------------------------------------------------
 # Flush sentinel leak
