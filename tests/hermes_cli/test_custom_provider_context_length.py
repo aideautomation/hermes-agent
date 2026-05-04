@@ -142,6 +142,28 @@ class TestGetCustomProviderContextLength:
             == 400_000
         )
 
+    def test_config_normalization_supports_id_and_model_dict_lists(self):
+        """Config-path lookups must honor normalized id/list-of-dicts entries."""
+        config = {
+            "custom_providers": [
+                {
+                    "id": "manifest",
+                    "base_url": "https://example.invalid/v1",
+                    "models": [
+                        {"id": "auto", "context_length": 200_000},
+                    ],
+                }
+            ]
+        }
+        assert (
+            get_custom_provider_context_length(
+                "auto",
+                "https://example.invalid/v1",
+                config=config,
+            )
+            == 200_000
+        )
+
 
 class TestGetModelContextLengthHonorsOverride:
     """agent.model_metadata.get_model_context_length must honor the

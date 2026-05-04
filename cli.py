@@ -1841,6 +1841,21 @@ def _looks_like_slash_command(text: str) -> bool:
     return "/" not in first_word[1:]
 
 
+def _resolve_voice_record_key(record_key: object) -> tuple[str, str]:
+    """Normalize ``voice.record_key`` into prompt_toolkit and display formats.
+
+    Empty, non-string, or whitespace-only values fall back to ``ctrl+b`` so a
+    hand-edited config like ``record_key: ""`` cannot crash CLI startup.
+    """
+    raw_key = record_key if isinstance(record_key, str) else ""
+    raw_key = raw_key.strip() or "ctrl+b"
+    prompt_toolkit_key = raw_key.lower().replace("ctrl+", "c-").replace("alt+", "a-")
+    display_key = raw_key
+    if "ctrl+" in raw_key.lower():
+        display_key = raw_key.replace("ctrl+", "Ctrl+").upper()
+    return prompt_toolkit_key, display_key
+
+
 # ============================================================================
 # Skill Slash Commands — dynamic commands generated from installed skills
 # ============================================================================
@@ -8492,11 +8507,11 @@ class HermesCLI:
         tts_status = " (TTS enabled)" if self._voice_tts else ""
         try:
             from hermes_cli.config import load_config
-            _raw_ptt = load_config().get("voice", {}).get("record_key", "ctrl+b")
-            _ptt_key = _raw_ptt.lower().replace("ctrl+", "c-").replace("alt+", "a-")
+            _ptt_key, _ptt_display = _resolve_voice_record_key(
+                load_config().get("voice", {}).get("record_key", "ctrl+b")
+            )
         except Exception:
-            _ptt_key = "c-b"
-        _ptt_display = _ptt_key.replace("c-", "Ctrl+").upper()
+            _ptt_key, _ptt_display = ("c-b", "CTRL+B")
         _cprint(f"\n{_ACCENT}Voice mode enabled{tts_status}{_RST}")
         _cprint(f"  {_DIM}{_ptt_display} to start/stop recording{_RST}")
         _cprint(f"  {_DIM}/voice tts  to toggle speech output{_RST}")
@@ -8563,7 +8578,7 @@ class HermesCLI:
         _cprint(f"  TTS:       {'ON' if self._voice_tts else 'OFF'}")
         _cprint(f"  Recording: {'YES' if self._voice_recording else 'no'}")
         _raw_key = load_config().get("voice", {}).get("record_key", "ctrl+b")
-        _display_key = _raw_key.replace("ctrl+", "Ctrl+").upper() if "ctrl+" in _raw_key.lower() else _raw_key
+        _, _display_key = _resolve_voice_record_key(_raw_key)
         _cprint(f"  Record key: {_display_key}")
         _cprint(f"\n  {_BOLD}Requirements:{_RST}")
         for line in reqs["details"].split("\n"):
@@ -10461,8 +10476,9 @@ class HermesCLI:
         # Config uses "ctrl+b" format; prompt_toolkit expects "c-b" format.
         try:
             from hermes_cli.config import load_config
-            _raw_key = load_config().get("voice", {}).get("record_key", "ctrl+b")
-            _voice_key = _raw_key.lower().replace("ctrl+", "c-").replace("alt+", "a-")
+            _voice_key, _ = _resolve_voice_record_key(
+                load_config().get("voice", {}).get("record_key", "ctrl+b")
+            )
         except Exception:
             _voice_key = "c-b"
 

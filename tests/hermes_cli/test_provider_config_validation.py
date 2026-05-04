@@ -183,6 +183,36 @@ class TestNormalizeCustomProviderEntry:
         assert result is not None
         assert result["models"] == {"valid": {}, "also-valid": {}}
 
+    def test_id_field_can_name_provider(self):
+        """Legacy/hand-edited entries may use ``id`` instead of ``name``."""
+        entry = {
+            "id": "manifest",
+            "base_url": "https://api.example.com/v1",
+            "models": ["auto"],
+        }
+        result = _normalize_custom_provider_entry(entry)
+        assert result is not None
+        assert result["name"] == "manifest"
+
+    def test_models_list_of_dicts_preserves_metadata(self):
+        """List-of-dicts model entries must retain per-model metadata."""
+        entry = {
+            "name": "manifest",
+            "base_url": "https://api.example.com/v1",
+            "models": [
+                {"id": "auto", "context_length": 200000},
+                {"name": "fast", "context_length": 64000, "mode": "cheap"},
+                {"model": "fallback", "context_length": 128000},
+            ],
+        }
+        result = _normalize_custom_provider_entry(entry)
+        assert result is not None
+        assert result["models"] == {
+            "auto": {"context_length": 200000},
+            "fast": {"context_length": 64000, "mode": "cheap"},
+            "fallback": {"context_length": 128000},
+        }
+
     def test_models_empty_list_omitted(self):
         """Empty list (falsy) should not produce a models key."""
         entry = {

@@ -2522,7 +2522,7 @@ def _normalize_custom_provider_entry(
     if "api_key_env" in entry and "key_env" not in entry:
         entry["key_env"] = entry["api_key_env"]
     _KNOWN_KEYS = {
-        "name", "api", "url", "base_url", "api_key", "key_env", "api_key_env",
+        "name", "id", "api", "url", "base_url", "api_key", "key_env", "api_key_env",
         "api_mode", "transport", "model", "default_model", "models",
         "context_length", "rate_limit_delay",
         "request_timeout_seconds", "stale_timeout_seconds",
@@ -2563,7 +2563,7 @@ def _normalize_custom_provider_entry(
         return None
 
     name = ""
-    raw_name = entry.get("name")
+    raw_name = entry.get("name") or entry.get("id")
     if isinstance(raw_name, str) and raw_name.strip():
         name = raw_name.strip()
     elif provider_key.strip():
@@ -2600,13 +2600,32 @@ def _normalize_custom_provider_entry(
     if isinstance(models, dict) and models:
         normalized["models"] = models
     elif isinstance(models, list) and models:
-        # Hand-edited configs (and older Hermes versions) write ``models`` as
-        # a plain list of model ids. Preserve them by converting to the dict
-        # shape downstream code expects; otherwise normalize silently drops
-        # the list and /model shows the provider with (0) models.
-        normalized["models"] = {
-            str(m): {} for m in models if isinstance(m, str) and m.strip()
-        }
+        # Hand-edited configs (and older Hermes versions) may write ``models`` as
+        # either a plain list of model ids or a list of per-model dicts. Preserve
+        # both forms by converting to the dict shape downstream code expects;
+        # otherwise normalize silently drops metadata and /model shows the
+        # provider with (0) models or loses context_length overrides.
+        models_dict: Dict[str, Any] = {}
+        for model_entry in models:
+            if isinstance(model_entry, str) and model_entry.strip():
+                models_dict[model_entry.strip()] = {}
+                continue
+            if not isinstance(model_entry, dict):
+                continue
+            model_id = (
+                model_entry.get("id")
+                or model_entry.get("name")
+                or model_entry.get("model")
+            )
+            if not isinstance(model_id, str) or not model_id.strip():
+                continue
+            models_dict[model_id.strip()] = {
+                key: value
+                for key, value in model_entry.items()
+                if key not in {"id", "name", "model"}
+            }
+        if models_dict:
+            normalized["models"] = models_dict
 
     context_length = entry.get("context_length")
     if isinstance(context_length, int) and context_length > 0:
